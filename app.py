@@ -1,10 +1,9 @@
-# /app.py
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_socketio import SocketIO, join_room, leave_room, send
 from datetime import datetime
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///matchmaking.db'
 db = SQLAlchemy(app)
 socketio = SocketIO(app)
@@ -31,6 +30,10 @@ class Turn(db.Model):
     match_id = db.Column(db.Integer, db.ForeignKey('match.id'), nullable=False)
     player = db.Column(db.String(50))
     move = db.Column(db.String(50))
+
+@app.route('/')
+def index():
+    return send_from_directory(app.static_folder, 'index.html')
 
 @app.route('/enqueue', methods=['POST'])
 def enqueue():
@@ -85,5 +88,6 @@ def handle_end_match(data):
     send({'status': 'finished', 'winner': winner}, room=match_id)
 
 if __name__ == '__main__':
-    db.create_all()
+    with app.app_context():
+        db.create_all()
     socketio.run(app, debug=True)
