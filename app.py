@@ -1,93 +1,58 @@
-from flask import Flask, request, jsonify, send_from_directory
-from flask_sqlalchemy import SQLAlchemy
-from flask_socketio import SocketIO, join_room, leave_room, send
-from datetime import datetime
+import sqlite3
 
-app = Flask(__name__, static_folder='static')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///matchmaking.db'
-db = SQLAlchemy(app)
-socketio = SocketIO(app)
+# Function to get database connection
+def get_db_connection():
+    conn = sqlite3.connect('chess.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
-class Queue(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    ip = db.Column(db.String(50))
-    port = db.Column(db.Integer)
-    pseudo = db.Column(db.String(50))
-    date_joined = db.Column(db.DateTime, default=datetime.utcnow)
+def add_to_queue(ip, port, pseudo):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO Queue (ip, port, pseudo, entry_date)
+        VALUES (?, ?, ?, datetime('now'))
+    ''', (ip, port, pseudo))
+    conn.commit()
+    conn.close()
 
-class Match(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    player1_ip = db.Column(db.String(50))
-    player1_port = db.Column(db.Integer)
-    player2_ip = db.Column(db.String(50))
-    player2_port = db.Column(db.Integer)
-    board_state = db.Column(db.String(500), default="initial")
-    finished = db.Column(db.Boolean, default=False)
-    winner = db.Column(db.String(50), nullable=True)
+def get_queue():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM Queue ORDER BY entry_date')
+    queue = cursor.fetchall()
+    conn.close()
+    return queue
 
-class Turn(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    match_id = db.Column(db.Integer, db.ForeignKey('match.id'), nullable=False)
-    player = db.Column(db.String(50))
-    move = db.Column(db.String(50))
+def create_match(player1_ip, player1_port, player2_ip, player2_port, board):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO Matches (player1_ip, player1_port, player2_ip, player2_port, board, is_finished, result)
+        VALUES (?, ?, ?, ?, ?, 0, '')
+    ''', (player1_ip, player1_port, player2_ip, player2_port, board))
+    match_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return match_id
 
-@app.route('/')
-def index():
-    return send_from_directory(app.static_folder, 'index.html')
+def update_match_result(match_id, is_finished, result):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE Matches
+        SET is_finished = ?, result = ?
+        WHERE id = ?
+    ''', (is_finished, result, match_id))
+    conn.commit()
+    conn.close()
 
-@app.route('/enqueue', methods=['POST'])
-def enqueue():
-    data = request.json
-    new_entry = Queue(ip=data['ip'], port=data['port'], pseudo=data['pseudo'])
-    db.session.add(new_entry)
-    db.session.commit()
-    check_for_match()
-    return jsonify({'status': 'queued'})
-
-@socketio.on('join_queue')
-def handle_join_queue(data):
-    new_entry = Queue(ip=data['ip'], port=data['port'], pseudo=data['pseudo'])
-    db.session.add(new_entry)
-    db.session.commit()
-    check_for_match()
-
-def check_for_match():
-    queue_entries = Queue.query.all()
-    if len(queue_entries) >= 2:
-        player1 = queue_entries[0]
-        player2 = queue_entries[1]
-        new_match = Match(player1_ip=player1.ip, player1_port=player1.port,
-                          player2_ip=player2.ip, player2_port=player2.port)
-        db.session.add(new_match)
-        db.session.delete(player1)
-        db.session.delete(player2)
-        db.session.commit()
-        socketio.emit('match_start', {'player1': player1.pseudo, 'player2': player2.pseudo})
-
-@socketio.on('move')
-def handle_move(data):
-    match_id = data['match_id']
-    move = data['move']
-    player = data['player']
-    new_turn = Turn(match_id=match_id, player=player, move=move)
-    db.session.add(new_turn)
-    db.session.commit()
-    match = Match.query.get(match_id)
-    match.board_state = data['board_state']
-    db.session.commit()
-    send(data, room=match_id)
-
-@socketio.on('end_match')
-def handle_end_match(data):
-    match_id = data['match_id']
-    winner = data['winner']
-    match = Match.query.get(match_id)
-    match.finished = True
-    match.winner = winner
-    db.session.commit()
-    send({'status': 'finished', 'winner': winner}, room=match_id)
-
-if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-    socketio.run(app, debug=True)
+def add_turn(match_id, player, move):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO Turns (match_id, player, move)
+        VALUES (?, ?, ?)
+    ''', (match_id, player, move))
+    conn.commit()
+    conn.close()
